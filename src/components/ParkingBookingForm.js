@@ -1,29 +1,29 @@
-import { useState, useRef, useEffect } from 'react';
-import { CSSTransition } from 'react-transition-group';
-import 'animate.css';
-
-import TimePicker from './TimePicker';
+import { useState, useEffect } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
+import Cookies from 'universal-cookie';
 
 function ParkingBookingForm() {
     const [step, setStep] = useState(1);
     const [formData, setFormData] = useState({
         name: '',
         phone: '',
-        location: '',
-        mall: '',
-        floor: 0,
-        slot: null,
+        vehicle_no: '',
+        slot: '',
         time: '',
-        duration: ''
     });
     const [locations, setLocations] = useState([]);
     const [malls, setMalls] = useState([]);
     const [floors, setFloors] = useState([]);
     const [slots, setSlots] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState(null);
+    const [error, setError] = useState('');
 
-    const stepRefs = [useRef(null), useRef(null), useRef(null), useRef(null)];
+    const [slot, setSlotId] = useState('');
+    const [tempData, setTempData] = useState({
+        location: '',
+        mall: '',
+        floor: ''
+    });
 
     useEffect(() => {
         const fetchLocations = async () => {
@@ -46,11 +46,11 @@ function ParkingBookingForm() {
 
     useEffect(() => {
         const fetchMalls = async () => {
-            if (!formData.location) return;
+            if (!tempData.location) return;
             setLoading(true);
             setError(null);
             try {
-                const res = await fetch(`http://localhost:3000/malls?location=${formData.location}`);
+                const res = await fetch(`http://localhost:3000/malls?location=${tempData.location}`);
                 if (!res.ok) throw new Error('Failed to fetch malls');
                 const data = await res.json();
                 setMalls(data);
@@ -62,15 +62,15 @@ function ParkingBookingForm() {
         };
 
         fetchMalls();
-    }, [formData.location]);
+    }, [tempData.location]);
 
     useEffect(() => {
         const fetchFloors = async () => {
-            if (!formData.mall) return;
+            if (!tempData.mall) return;
             setLoading(true);
             setError(null);
             try {
-                const res = await fetch(`http://localhost:3000/slots/floors?mall_id=${formData.mall}`);
+                const res = await fetch(`http://localhost:3000/slots/floors?mall_id=${tempData.mall}`);
                 if (!res.ok) throw new Error('Failed to fetch floors');
                 const data = await res.json();
                 setFloors(data);
@@ -82,15 +82,15 @@ function ParkingBookingForm() {
         };
 
         fetchFloors();
-    }, [formData.mall]);
+    }, [tempData.mall]);
 
     useEffect(() => {
         const fetchSlots = async () => {
-            if (!formData.floor || !formData.mall) return;
+            if (!tempData.floor || !tempData.mall) return;
             setLoading(true);
             setError(null);
             try {
-                const res = await fetch(`http://localhost:3000/slots?mall_id=${formData.mall}&floor_no=${formData.floor}`);
+                const res = await fetch(`http://localhost:3000/slots?mall_id=${tempData.mall}&floor_no=${tempData.floor}`);
                 if (!res.ok) throw new Error('Failed to fetch slots');
                 const data = await res.json();
                 setSlots(data);
@@ -102,21 +102,49 @@ function ParkingBookingForm() {
         };
 
         fetchSlots();
-    }, [formData.floor, formData.mall]);
+    }, [tempData.floor, tempData.mall]);
+
+    useEffect(() => {
+        const cookies = new Cookies();
+        const activeBooking = cookies.get('activeBooking');
+
+        if (!activeBooking) {
+            if (formData.slot) {
+                cookies.set('activeBooking', formData.slot, { path: '/', maxAge: 60 * 60 * 24 });
+            }
+        } else {
+            fetch('http://localhost:3000/book?slot_id=' + activeBooking)
+                .then((res) => res.json())
+                .then((data) => {
+                    if (data.length < 1) {
+                        cookies.remove('activeBooking');
+                    }
+                    else {
+                        setSlotId(activeBooking);
+                        setStep(5);
+                    }
+                });
+
+        }
+    }, [formData.slot]);
 
     const handleNextStep = () => {
+        if (step === 3) {
+            const time = slotTime().toTimeString().slice(0, 5) + ":00";
+            setFormData({ ...formData, time });
+        }
         setStep((prevStep) => prevStep + 1);
     };
 
     const handlePrevStep = () => setStep((prevStep) => prevStep - 1);
 
     const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
+    const handleTemp = (e) => setTempData({ ...tempData, [e.target.name]: e.target.value });
 
     const isStepValid = () => {
         if (step === 1) return formData.name && formData.phone.length === 10;
-        if (step === 2) return formData.location && formData.mall;
+        if (step === 2) return tempData.location && tempData.mall;
         if (step === 3) return formData.slot;
-        if (step === 4) return formData.time && formData.duration;
         return true;
     };
 
@@ -124,8 +152,30 @@ function ParkingBookingForm() {
 
     const handleSubmit = (e) => {
         e.preventDefault();
-        console.log('Form Data:', formData);
-        // Submit form data here
+        fetch(`http://localhost:3000/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: formData.name, phone: formData.phone, vehicle_no: formData.vehicle_no }),
+        })
+            .then((res) => res.json())
+            .then((data) => {
+                return fetch('http://localhost:3000/book', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: data.id, slot_id: formData.slot, time: formData.time }),
+                });
+            })
+            .then((res) => res.json())
+            .catch((err) => console.error(err));
+
+        fetch(`http://localhost:3000/slots`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: formData.slot, is_available: false }),
+        });
+        setSlotId(formData.slot);
+        setStep(5);
+
     };
 
     const handleKeyDown = (e) => {
@@ -133,6 +183,10 @@ function ParkingBookingForm() {
             handleNextStep();
         }
     };
+
+    const slotTime = () => {
+        return new Date(new Date().getTime() + 1800000);
+    }
 
     return (
         <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
@@ -144,15 +198,10 @@ function ParkingBookingForm() {
                 {/* Loading Indicator */}
                 {loading && <p className="text-yellow-500">Loading...</p>}
 
+
                 {/* Step 1: User Details */}
-                <CSSTransition
-                    in={step === 1}
-                    timeout={300}
-                    classNames="fade"
-                    unmountOnExit
-                    nodeRef={stepRefs[0]}
-                >
-                    <div ref={stepRefs[0]} className="animate__animated animate__fadeIn">
+                {step === 1 && (
+                    <div>
                         <h2 className="text-xl font-bold mb-4">User Information</h2>
                         <input
                             type="text"
@@ -173,6 +222,15 @@ function ParkingBookingForm() {
                             maxLength={10}
                             onKeyDown={handleKeyDown}
                         />
+                        <input
+                            type="text"
+                            name="vehicle_no"
+                            value={formData.vehicle_no}
+                            onChange={handleChange}
+                            className="w-full mb-4 p-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 transition-all duration-300"
+                            placeholder="Enter your vehicle number"
+                            onKeyDown={handleKeyDown}
+                        />
                         <button
                             onClick={handleNextStep}
                             disabled={!isStepValid()}
@@ -181,22 +239,16 @@ function ParkingBookingForm() {
                             Next
                         </button>
                     </div>
-                </CSSTransition>
+                )}
 
                 {/* Step 2: Location and Mall Selection */}
-                <CSSTransition
-                    in={step === 2}
-                    timeout={300}
-                    classNames="fade"
-                    unmountOnExit
-                    nodeRef={stepRefs[1]}
-                >
-                    <div ref={stepRefs[1]} className="animate__animated animate__fadeIn">
+                {step === 2 && (
+                    <div>
                         <h2 className="text-xl font-bold mb-4">Select Location and Mall</h2>
                         <select
                             name="location"
-                            value={formData.location}
-                            onChange={handleChange}
+                            value={tempData.location}
+                            onChange={handleTemp}
                             className="w-full mb-4 p-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 transition-all duration-300"
                         >
                             <option value="">Select Location</option>
@@ -208,8 +260,8 @@ function ParkingBookingForm() {
                         </select>
                         <select
                             name="mall"
-                            value={formData.mall}
-                            onChange={handleChange}
+                            value={tempData.mall}
+                            onChange={handleTemp}
                             className="w-full mb-4 p-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 transition-all duration-300"
                         >
                             <option value="">Select Mall</option>
@@ -232,22 +284,16 @@ function ParkingBookingForm() {
                             </button>
                         </div>
                     </div>
-                </CSSTransition>
+                )}
 
                 {/* Step 3: Floor and Slot Selection */}
-                <CSSTransition
-                    in={step === 3}
-                    timeout={300}
-                    classNames="fade"
-                    unmountOnExit
-                    nodeRef={stepRefs[2]}
-                >
-                    <div ref={stepRefs[2]} className="animate__animated animate__fadeIn">
+                {step === 3 && (
+                    <div>
                         <h2 className="text-xl font-bold mb-4">Select Floor and Slot</h2>
                         <select
                             name="floor"
-                            value={formData.floor}
-                            onChange={handleChange}
+                            value={tempData.floor}
+                            onChange={handleTemp}
                             className="w-full mb-4 p-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 transition-all duration-300"
                         >
                             <option value="">Select Floor</option>
@@ -263,8 +309,8 @@ function ParkingBookingForm() {
                                     key={slot.id}
                                     onClick={() => handleSlotSelection(slot)}
                                     className={`p-4 text-center rounded-lg cursor-pointer
-                                    ${slot.is_available ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-600 cursor-not-allowed'}
-                                    ${formData.slot === slot.id ? 'ring-4 ring-blue-500' : ''}`}
+                        ${slot.is_available ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-600 cursor-not-allowed'}
+                        ${formData.slot === slot.id ? 'ring-4 ring-blue-500' : ''}`}
                                 >
                                     {slot.slot_no}
                                 </div>
@@ -283,42 +329,39 @@ function ParkingBookingForm() {
                             </button>
                         </div>
                     </div>
-                </CSSTransition>
+                )}
 
-                {/* Step 4: Time and Duration Selection */}
-                <CSSTransition
-                    in={step === 4}
-                    timeout={300}
-                    classNames="fade"
-                    unmountOnExit
-                    nodeRef={stepRefs[3]}
-                >
-                    <div ref={stepRefs[3]} className="animate__animated animate__fadeIn">
-                        <h2 className="text-xl font-bold mb-4">Select Time and Duration</h2>
-                        <TimePicker time={formData.time} onChange={(newTime) => setFormData({ ...formData, time: newTime })} />
-                        <input
-                            type="text"
-                            name="duration"
-                            value={formData.duration}
-                            onChange={handleChange}
-                            className="w-full mb-4 p-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 transition-all duration-300"
-                            placeholder="Enter duration (in hours)"
-                            onKeyDown={handleKeyDown}
-                        />
-                        <div className="flex space-x-4">
+                {/* Step 4: Confirmation */}
+                {step === 4 && (
+                    <div>
+                        <h2 className="text-2xl font-bold mb-4">Confirmation</h2>
+                        <p className="text-lg mb-2 pl-8"><span className="font-bold text-xl">Name: </span>{formData.name}</p>
+                        <p className="text-lg mb-2 pl-8"><span className='font-bold text-xl'>Phone: </span>{formData.phone}</p>
+                        <p className="text-lg mb-2 pl-8"><span className='font-bold text-xl'>Vehicle No.: </span>{formData.vehicle_no}</p>
+                        <p className="text-lg mb-2 pl-8"><span className='font-bold text-xl'>Slot Time: </span>{formData.time}</p>
+
+                        <div className="flex space-x-4 pt-4">
                             <button onClick={handlePrevStep} className="w-1/2 p-3 bg-gray-500 rounded-lg">
                                 Back
                             </button>
                             <button
                                 onClick={handleSubmit}
-                                disabled={!isStepValid()}
                                 className={`w-1/2 p-3 rounded-lg ${isStepValid() ? 'bg-blue-600' : 'bg-gray-500 cursor-not-allowed'}`}
                             >
-                                Submit
+                                Confirm
                             </button>
                         </div>
                     </div>
-                </CSSTransition>
+                )}
+
+                {/* Step 5: Success Screen */}
+                {step === 5 && (
+                    <div className="text-center">
+                        <p className="text-lg mb-2">Your booking ID is:</p>
+                        <p className="text-2xl font-bold mb-4">{slot}</p>
+                        <QRCodeSVG value={JSON.stringify(slot)} className="mx-auto" />
+                    </div>
+                )}
             </div>
         </div>
     );
